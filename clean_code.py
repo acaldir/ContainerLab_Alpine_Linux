@@ -474,24 +474,29 @@ def yaz_hosts_yml(ans_path, cihaz_bilgisi):
     header = """\
 all:
   vars:
-    ansible_connection: network_cli
-    ansible_network_os: cisco.ios.ios
     ansible_user: admin
     ansible_password: admin
     ansible_httpapi_use_proxy: false
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
-
   children:
 """
     groups = {
-        "routers":      (("R", "vR", "cSR"), "router_id"),
-        "switches":     (("SW", "vSW"),  "switch_id"),
-        "vpcs":         (("vPC",), "router_id"),
+        "routers":      (("R", "vR", "cSR"), "router_id", {
+            "ansible_connection": "network_cli",
+            "ansible_network_os": "cisco.ios.ios",
+        }),
+        "switches":     (("SW", "vSW"),  "switch_id", {
+            "ansible_connection": "network_cli",
+            "ansible_network_os": "cisco.ios.ios",
+        }),
     }
 
     satir = [header]
-    for groupdaki_cihazlar, (prefix, id_atama) in groups.items():
-        satir.append(f"    {groupdaki_cihazlar}:\n      hosts:")
+    for groupdaki_cihazlar, (prefix, id_atama, vars_dict) in groups.items():
+        satir.append(f"    {groupdaki_cihazlar}:\n      vars:")
+        for var_name, var_value in vars_dict.items():
+            satir.append(f"        {var_name}: {var_value}")
+        satir.append("      hosts:")
 
         filtered_cihazlar = (
             (input_cihaz_isimleri, atanacak_ip_adresi)
@@ -523,6 +528,17 @@ def yaz_interfaces_j2(ans_path):
         f.write("!\n")
         f.write("{% endfor %}")
 
+
+def yaz_interfaces_eth1_j2(ans_path):
+    with open(os.path.join(ans_path, "templates", "interface_eth1.j2"), 'w') as f:
+        f.write("{% for intf in network_config[inventory_hostname].interfaces %}\n")
+        f.write("{% if intf.name == 'eth1' %}\n")
+        f.write("ip addr add {{ intf.ip }}/24 dev {{ intf.name }}\n")
+        f.write("ip link set {{ intf.name }} up\n")
+        f.write("{% endif %}\n")
+        f.write("{% endfor %}")
+
+
 def yaz_deploy_yml(ans_path):
     templates_path = os.path.join(ans_path, "templates")
     j2_dosyalari = sorted([d for d in os.listdir(templates_path) if d.endswith(".j2")])
@@ -542,8 +558,19 @@ def yaz_deploy_yml(ans_path):
             f.write("      cisco.ios.ios_config:\n")
             f.write(f"        src: \"../templates/{j2}\"\n")
             f.write("        match: none\n")
-            f.write("    - tags:\n")
+            f.write("      tags:\n")
             f.write(f"        - {template_name}\n\n")
+
+        f.write("- name: Configure Linux vPC Devices\n")
+        f.write("  hosts: vpcs\n")
+        f.write("  gather_facts: no\n")
+        f.write("  tasks:\n")
+        f.write("    - name: Generate vPC eth1 configuration\n")
+        f.write("      ansible.builtin.template:\n")
+        f.write("        src: \"../templates/interface_eth1.j2\"\n")
+        f.write("        dest: \"/tmp/interface_eth1.sh\"\n")
+        f.write("    - name: Apply vPC eth1 configuration\n")
+        f.write("      ansible.builtin.shell: sh /tmp/interface_eth1.sh\n")
 
 def ansible_klasorlerini_olustur(ans_path):
     for sub in ["vars", "inventory", "templates", "playbooks"]:
@@ -571,6 +598,7 @@ def convert_txt_to_yaml():
         yaz_hosts_yml(ans_path, cihaz_bilgisi)
         yaz_loopback_j2(ans_path)
         yaz_interfaces_j2(ans_path)
+        yaz_interfaces_eth1_j2(ans_path)
         yaz_deploy_yml(ans_path)
 
         print("-----------------------------------------------------------------------------------------------")
